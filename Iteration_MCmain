@@ -1,0 +1,215 @@
+clear
+clc
+
+load MCData;
+
+
+% Set the parameters we will run this under
+L = 0;                 % The constraint value         
+B = [10^2; 10^2];      % The smoothness constraint, first on beta, then on bootstrap
+k_n = 1;               % The number of knots for Bsplines
+Ord_X = 4;             % The order of the Bspline
+Replications = 25;
+s = T - R;
+
+% And the structures we'll save this in.
+quant = NaN(Replications,1); 
+xflag = NaN(Replications,1);
+fval = NaN(Replications,1);
+
+% Find out how many bases we actually have
+A = 0:(k_n+1); A = augknt(A,Ord_X); 
+A = spcol(A, Ord_X, 1:10); nbasis = size(A,2);
+%Save_opt = zeros(size(A,2), Replications);
+Save_opt = zeros(size(A,2)+ R*(T-R), Replications);
+clear A;
+
+
+% Moving on to the smoothness constraint, we need to set up a grid of
+% points to evaluate the derivative of the splines
+div4g = 0.01; knots = 0:1/(k_n+1):1; knots = norminv(knots(2:end-1));
+knots = 2*(normcdf(knots/3) - 0.5); knots = [-1 knots 1]; knots = augknt(knots,Ord_X);
+T1 = (-1:div4g:1)'; T1 = repmat(T1,Ord_X,1); T1 = sort(T1);
+T2 = spcol(knots, Ord_X, T1);
+
+XGrid = zeros(length(-1:div4g:1), nbasis, Ord_X);
+for i = 1:Ord_X
+    for j = 1:length(-1:div4g:1)
+        XGrid(j,:,i) = T2(Ord_X*(j-1) + i,:);
+    end
+end
+
+% Now with this grid we'll do numerical integration
+LM = zeros(size(XGrid,2));
+for d = 1:size(XGrid,3)
+    for j = 1:size(XGrid,2)
+        A = repmat(XGrid(:,j,d), 1, size(XGrid,2)).*XGrid(:,:,d);
+        LM(j,:) = LM(j,:) + trapz(A)*div4g;
+    end
+end
+
+clear A T1 T2 i j d div4g;
+
+
+% Set the starting values of the first optimization
+%x0 = zeros(nbasis,1)*1;
+%x0 = zeros(nbasis + R*(T-R),1)*1;
+%x0 = [2 -4 0 4 -2 0.5 0.5 1.1 0.2 0.1 0.6]';
+
+
+for k = 1 : Replications
+    tic
+    beta = [2 -4 0 4 -2]';
+    phi = [0.1 0.6]';
+    y1 = 100;
+    y2 = 100;
+    
+    % Evaluate the X at the different splines. Knots put at the percentiles
+    XSplines = [];
+    for t = 1+T*(k-1) : T*k
+        XSplines = [XSplines spcol(knots, Ord_X, X(:,t))];
+    end
+    
+    % And put the data together
+    Data = [Y(:,1+T*(k-1):T*k) Z(:,1+T*(k-1):T*k) XSplines];
+    
+    % Finish setting up the constraints
+    Am = []; Bm = []; LB = []; UB = [];
+    
+    
+    % This is the value of the function at the point 0
+    Aeq = spcol(knots, Ord_X, 0);
+    Aeq2 = [];
+    %Aeq = [spcol(knots, Ord_X, 0) zeros(1,R*(T-R))];
+    %BootAeq = [Aeq zeros(1,size(XSplines,2)); zeros(1,size(XSplines,2)) Aeq];
+    
+    % And optimization options - for full sample problem
+    options = optimset('fmincon'); options.GradObj = 'off'; options.Display = 'off';
+    options.GradConstr = 'off'; options.DerivativeCheck = 'on';
+    options.MaxFunEvals = 10000; options.MaxIter = 10000;
+    options.Algorithm = 'active-set';
+    options.TolFun = 1e-8;
+    
+    %     opts = optimoptions(@fmincon,'Algorithm','sqp','GradObj','off','Display','off','GradConstr','off','DerivativeCheck','on','MaxFunEvals',10000,'MaxIter',10000,'TolFun',1e-8);
+    %     gs = GlobalSearch;
+    % Now look at the bounds
+    Beq = L;
+    Beq2 = [];
+    
+    j=0;
+    while(1)
+        % Set up the functions to be called
+        fobj = @(x)f_min1(x,phi,Data,s,T,nbasis);
+        fcon = @(x)f_nonlcon1(x,phi,LM,B(1));
+        
+        % And finally call the optimizer
+        [beta,y1,xflag1,output1] = fmincon(fobj, beta, Am, Bm, Aeq, Beq, LB, UB, fcon,options);j=j+1;
+        
+        if(abs(y2-y1)<1e-9) || j>99
+            Save_opt(:,k)=[beta;phi];fval(k) = y1;xflag(k) = xflag1;output=output1;
+            j
+            break;
+        end
+        
+        fobj2 = @(x)f_min2(x,beta,Data,s,T,nbasis);
+        fcon2 = @(x)f_nonlcon2(x,beta,LM,B(1));
+        
+        [phi,y2,xflag2,output2] = fmincon(fobj2, phi, Am, Bm, Aeq2, Beq2, LB, UB, fcon2,options);j = j + 1;
+        if(abs(y2-y1)<1e-9) || j>99
+            Save_opt(:,k)=[beta;phi];fval(k) = y2;xflag(k) = xflag2;output=output2;
+            j
+            break;
+        end
+    end
+    if j > 99
+        xflag(k) = 0;
+    end
+        
+    %     problem = createOptimProblem('fmincon','x0',x0,'objective',fobj,'Aeq',Aeq,'beq',Beq,'nonlcon',fcon,'options',opts);
+    %     [Save_opt(:,k),fval(k),xflag(k),output] = run(gs,problem);
+    
+    %Calculate the bootstrap statistic. Get sample, etc.
+    r = 100; BI = int64(1 + rand(n,r)*(n-1));
+    BXflag = zeros(r,1);BVal = zeros(r,1);
+    
+    %Now get the bootstrap critical value - but only if you converged
+    if xflag(k) > 0
+        
+        %Set the starting value for the bootstrap
+        %x0 = ones(nbasis,1);
+        %x0 = zeros(nbasis + R*(T-R),1)*1;
+        %x0 = [2 -4 0 4 -2 0.5 0.5 1.1 0.2 0.1 0.6]';
+        
+        
+        BCon = n^(4/3);
+        
+        
+        for b = 1:r
+            beta0 = beta;
+            phi0 = phi;
+            y1 = 100;
+            y2 = 100;
+            %Put together the bootstrap sample
+            BY = Y(BI(:,b),1+T*(k-1):T*k); BZ = Z(BI(:,b),1+T*(k-1):T*k);
+            
+            %And the Xsplines
+            BXS = XSplines*0;
+            for c = 1 : size(XSplines,2)
+                A = XSplines(:,c);
+                BXS(:,c) = A(BI(:,b));
+            end
+            
+            BData = [BY BZ BXS; Data];
+            
+            i = 0;
+            while(1)
+                % Set up the functions to be called
+                fobj = @(x)f_boot_min1(x,phi0,BData,s,T,BCon,nbasis);
+                fcon = @(x)f_nonlcon1(x,phi0,LM,B(1));
+                
+                % And finally call the optimizer
+                [beta0,y1,xflag1] = fmincon(fobj, beta0, Am, Bm, Aeq, Beq, LB, UB, fcon,options);i = i+1;
+                
+                if(abs(y2-y1)<1e-9) || i>99
+                    BVal(b) = y1;BXflag(b) = xflag1;
+                    i
+                    break;
+                end
+                
+                fobj2 = @(x)f_boot_min2(x,beta0,BData,s,T,BCon,nbasis);
+                fcon2 = @(x)f_nonlcon2(x,beta0,LM,B(1));
+                
+                [phi0,y2,xflag2] = fmincon(fobj2, phi0, Am, Bm, Aeq2, Beq2, LB, UB, fcon2,options);i = i+1;
+                if(abs(y2-y1)<1e-9) || i>99
+                    BVal(b) = y2;BXflag(b) = xflag2;
+                    i
+                    break;
+                end
+            end
+            if i>99
+                BXflag(b) = 0;
+            end
+        end
+        %Get the quantile we are looking for
+        BVal = BVal(BXflag > 0);
+        quant(k) = sum(BVal <= fval(k))/length(BVal);
+        
+    else
+        quant(k,:) = NaN;
+    end
+    k
+    toc
+    % And use the optimum as the starting point for the next optimization
+    %x0 = Save_opt(:,k);
+end
+    
+
+%save MCOutput quant fval Save_opt;
+
+
+
+
+
+
+
+
