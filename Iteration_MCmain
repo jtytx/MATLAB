@@ -9,7 +9,6 @@ L = 0;                 % The constraint value
 B = [10^2; 10^2];      % The smoothness constraint, first on beta, then on bootstrap
 k_n = 1;               % The number of knots for Bsplines
 Ord_X = 4;             % The order of the Bspline
-Replications = 25;
 s = T - R;
 
 % And the structures we'll save this in.
@@ -129,7 +128,7 @@ for k = 1 : Replications
     %     [Save_opt(:,k),fval(k),xflag(k),output] = run(gs,problem);
     
     %Calculate the bootstrap statistic. Get sample, etc.
-    r = 100; BI = int64(1 + rand(n,r)*(n-1));
+    r = 50; BI = int64(1 + rand(n,r)*(n-1));
     BXflag = zeros(r,1);BVal = zeros(r,1);
     
     %Now get the bootstrap critical value - but only if you converged
@@ -141,10 +140,10 @@ for k = 1 : Replications
         %x0 = [2 -4 0 4 -2 0.5 0.5 1.1 0.2 0.1 0.6]';
         
         
-        BCon = n^(4/3);
+        BCon = n^(1/3);
         
         
-        for b = 1:r
+        parfor b = 1:r
             beta0 = beta;
             phi0 = phi;
             y1 = 100;
